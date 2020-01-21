@@ -725,3 +725,5 @@ plot(rf, main = 'Error for Random Forest with 500 trees')
 # We rerun the model with 100 trees
 rf <- randomForest(Absenteeism.time.in.hours ~., data=abs_rf, nodesize=5, ntree = 100, mtry = 4)
 plot(rf, main = 'Error for Random Forest with 100 trees')
+
+### Credit to my teammates Joy Lin and Yasi Chen for their dedicated contribution to this project.
