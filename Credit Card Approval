@@ -1,0 +1,298 @@
+library(tidyverse)
+library(corrplot)
+library(reshape2)
+library(ggplot2)
+library(RColorBrewer)
+library(ElemStatLearn)
+library(class)
+library(glmnet)
+library(dplyr)
+library(e1071)
+library(rpart)
+library(caret)
+library(MLmetrics)
+library(GGally)
+library(MASS)
+library(randomForest)
+library(nnet)
+library(tm)
+library(textir)
+library(SnowballC)
+library(ngram)
+library(tree)
+source('DataAnalyticsFunctions.R')
+options(warn=-1)
+
+### load files
+creditrecord <- read.csv('credit_record.csv')
+applicationrecord <- read.csv('application_record.csv')
+creditrecord1 <- creditrecord[creditrecord$MONTHS_BALANCE == 0,]
+head(creditrecord1)
+head(applicationrecord)
+data <- merge(applicationrecord, creditrecord1, by = 'ID', all.x = TRUE)
+head(data)
+
+
+### examine the data
+# rename columns
+data <- data %>%
+  rename(
+    Gender = CODE_GENDER,
+    Car = FLAG_OWN_CAR,
+    Reality = FLAG_OWN_REALTY,
+    ChildNo = CNT_CHILDREN,
+    Income = AMT_INCOME_TOTAL,
+    IncType = NAME_INCOME_TYPE,
+    EduType = NAME_EDUCATION_TYPE,
+    FamStatus = NAME_FAMILY_STATUS,
+    HousingType = NAME_HOUSING_TYPE,
+    Birthday = DAYS_BIRTH,
+    Employed = DAYS_EMPLOYED,
+    Mobile = FLAG_MOBIL,
+    WorkPhone = FLAG_WORK_PHONE,
+    Phone = FLAG_PHONE,
+    Email = FLAG_EMAIL,
+    OccType = OCCUPATION_TYPE,
+    FamMemberNo = CNT_FAM_MEMBERS,
+    MonthBal = MONTHS_BALANCE,
+    Status = STATUS
+  )
+
+# change some variables to factors
+data$ID <- as.factor(data$ID)
+data$Employed <- as.factor(data$Employed)
+data$Mobile <- as.factor(data$Mobile)
+data$WorkPhone <- as.factor(data$WorkPhone)
+data$Phone <- as.factor(data$Phone)
+data$Email <- as.factor(data$Email)
+data$OccType <- as.factor(data$OccType)
+
+# summary the data
+summary(data)
+summary(data$ID)
+summary(data$OccType)
+summary(data$Status)
+
+# Clean the data
+data$OccType[data$OccType == ""] <- "Other"
+data$OccType <- as.character(data$OccType)
+data$OccType[is.na(data$OccType)] <- "Other"
+data$OccType <- as.factor(data$OccType)
+summary(data$OccType)
+
+data$Status <- as.character(data$Status)
+data$Status[is.na(data$Status)] <- "Other"
+data$Status <- as.factor(data$Status)
+summary(data$Status)
+
+data$Approval[!data$Status == "Other"] <- 1 
+data$Approval[data$Status == "Other"] <- 0 
+data$Approval <- as.numeric(data$Approval)
+
+# Drop the following columns since they are not meaningful 
+# in predicting credit card approval: ID, Birthday, Employed, MonthBal, Mobile
+drop <- c('ID', 'Birthday', 'Employed', 'MonthBal', 'Mobile' )
+final_data <- data[,!names(data) %in% drop]
+final_data$Approval <- as.factor(final_data$Approval)
+summary(final_data$Approval)
+summary(final_data)
+summary(final_data$Status)
+
+### Unsupervised model
+## K mean
+
+# k-cluster graph
+simple <- final_data[,c(4,5)]
+par(mar = c(5, 5, 3, 1))
+plot(simple, col = 4, xlab="ChildNo", ylab="Income")
+plot(simple, col = 4 - final_data[,16], xlab="ChildNo", ylab="Income")
+final_data[,16]
+
+# #draft the first graph with 6 clusters
+simple_kmeans <- kmeans(simple,6,nstart=10)
+simple_kmeans$cluster
+colorcluster <- 1+simple_kmeans$cluster
+plot(simple, col = colorcluster, xlab="ChildNo", ylab="Income")
+points(simple_kmeans$centers, col = 1, pch = 24, cex = 1.5, lwd=1, bg = 2:5)
+
+#scale the dataset
+apply(simple,2,sd)
+apply(simple,2,mean)
+Ssimple <- scale(simple)
+apply(Ssimple,2,sd)
+apply(Ssimple,2,mean)
+
+#the second graph after scaling the dataset
+Ssimple_kmeans <- kmeans(Ssimple,6,nstart=10)
+colorcluster <- 1+Ssimple_kmeans$cluster
+plot(Ssimple, col = 1, xlab="ChildNo", ylab="Income")
+plot(Ssimple, col = colorcluster, xlab="ChildNo", ylab="Income", main = '')
+points(Ssimple_kmeans$centers, col = 1, pch = 24, cex = 1.5, lwd=1, bg = 2:7)
+
+# Choose the optimal number of cluster
+kIC <- function(fit, rule=c("A","B","C")){
+  df <- length(fit$centers) # K*dim
+  n <- sum(fit$size)
+  D <- fit$tot.withinss # deviance
+  rule=match.arg(rule)
+  if(rule=="A")
+    #return(D + 2*df*n/max(1,n-df-1))
+    return(D + 2*df)
+  else if(rule=="B") 
+    return(D + log(n)*df)
+  else 
+    return(D +  sqrt( n * log(df) )*df)
+}
+kfit <- lapply(1:30, function(k) kmeans(Ssimple,k,nstart=10))
+kaic <- sapply(kfit,kIC)
+kbic  <- sapply(kfit,kIC,"B")
+kHDic  <- sapply(kfit,kIC,"C")
+par(mar=c(1,1,1,1))
+par(mai=c(1,1,1,1))
+plot(kaic, xlab="k (# of clusters)", ylab="IC (Deviance + Penalty)", 
+     ylim=range(c(kaic,kbic,kHDic)), # get them on same page
+     type="l", lwd=2)
+
+# Vertical line where AIC is minimized
+abline(v=which.min(kaic))
+# Next we plot BIC
+lines(kbic, col=4, lwd=2)
+# Vertical line where BIC is minimized
+abline(v=which.min(kbic),col=4)
+# Next we plot HDIC
+lines(kHDic, col=3, lwd=2)
+# Vertical line where HDIC is minimized
+abline(v=which.min(kHDic),col=3)
+# Insert labels
+text(c(which.min(kaic),which.min(kbic),which.min(kHDic)),c(mean(kaic),mean(kbic),mean(kHDic)),c("AIC","BIC","HDIC"))
+
+### Modeling
+final_data$Approval <- as.factor(final_data$Approval)
+summary(final_data$Approval)
+str(final_data)
+
+x_vars<- model.matrix(Approval~., data=final_data)[,-1]
+y_var <- final_data$Approval
+
+## Logistic Regression
+full.model <- glm(Approval~., data = final_data, family = 'binomial')
+model.backward <- step(full.model, direction = 'backward', trace = 0)
+formula(model.backward)
+summary(model.backward)
+
+## Logistic Regression Interaction
+#full.model <- glm(Approval~.^2, data = final_data, family = 'binomial')
+#model.backward <- step(full.model, direction = 'backward', trace = 0)
+#formula(model.backward)
+#summary(model.backward)
+
+## Logistic Regression with Lasso
+cv_lasso <- cv.glmnet(x_vars,y_var,alpha = 1, family = 'binomial')
+cv_lasso
+min_lambda <- cv_lasso$lambda.min
+se1_lambda <- cv_lasso$lambda.1se
+
+## Logistic Regression with Post Lasso
+lasso <- glmnet(x_vars,y_var, family = 'binomial')
+lassobeta <- lasso$beta
+features.min <- list()
+lengthmin <- data.frame(betamin=rep(NA,length(lassobeta)))
+features.1se <- list()
+length1se <- data.frame(beta1se=rep(NA,length(lassobeta)))
+
+##Extract Beta from Lasso results
+# support<- function(x, tr = 10e-6) {
+#   m<- rep(0, length(x))
+#   for (i in 1:length(x)) if( abs(x[i])> tr ) m[i]<- i
+#   m <- m[m>0]
+#   m
+# }
+# 
+# i = 1
+# for (i in 1:length(lassobeta)) {
+#   beta <- lassobeta[[i]]
+#   features.min[[i]] <- support(beta[,which.min(cv_lasso$cvm)])
+#   features.1se[[i]] <- support(beta[,which.min((cv_lasso$lambda-cv_lasso$lambda.1se)^2)])
+#   lengthmin[i] <- length(features.min)
+#   length1se[i] <- length(features.1se)
+# }
+# 
+# data.min <- list()
+# data.1se <- list()
+# 
+# i = 1
+# for (i in 1:length(lassobeta)) {
+#   data.min[[i]] <- data.frame(x_vars[,features.min[[i]]],y_var)
+#   data.1se[[i]] <- data.frame(x_vars[,features.1se[[i]]],y_var)
+# }
+
+#######################################################################
+##### Cross validation for OOS R-square
+### create a vector of fold memberships (random order)
+set.seed(1)
+nfold <- 5
+n <- nrow(final_data)
+foldid <- rep(1:nfold,each=ceiling(n/nfold))[sample(1:n)]
+### create an empty dataframe of results
+LR.OOS <- data.frame(logistic=rep(NA,nfold), null=rep(NA,nfold))
+T.OOS <- data.frame(tree=rep(NA,nfold))
+PL.OOS <- data.frame(PL.min=rep(NA,nfold), PL.1se=rep(NA,nfold)) 
+L.OOS <- data.frame(L.min=rep(NA,nfold), L.1se=rep(NA,nfold)) 
+features.min <- support(lasso$beta[,which.min(cv_lasso$cvm)])
+length(features.min)
+features.1se <- support(lasso$beta[,which.min( (cv_lasso$lambda-cv_lasso$lambda.1se)^2)])
+length(features.1se) 
+
+data.min <- data.frame(x_vars[,features.min],y_var)
+data.1se <- data.frame(x_vars[,features.1se],y_var)
+
+### Use a for loop to run through the nfold trails
+for(k in 1:nfold){ 
+  train <- which(foldid!=k) # train on all but fold `k'
+  ## Cross validation for logistic regression and null model
+  model.logistic <-glm(Approval~., data=final_data, subset=train,family="binomial")
+  model.nulll    <-glm(Approval~1, data=final_data, subset=train,family="binomial")
+  ## get predictions: type=response so we have probabilities
+  pred.logistic <- predict(model.logistic, newdata=final_data[-train,], type="response")
+  pred.null     <- predict(model.nulll, newdata=final_data[-train,], type="response")
+  ## calculate and log R2
+  # Logistic
+  LR.OOS$logistic[k] <- R2(y=final_data$Approval[-train], pred=pred.logistic, family="binomial")
+  LR.OOS$logistic[k]
+  #Null
+  LR.OOS$null[k] <- R2(y=final_data$Approval[-train], pred=pred.null, family="binomial")
+  LR.OOS$null[k]
+  ## Cross validation for classification tree
+  model.tree     <- tree(Approval~ ., data=final_data, subset=train)
+  pred.tree     <- predict(model.tree, newdata=final_data[-train,], type="vector")
+  pred.tree     <- pred.tree[,2]
+  T.OOS$tree[k] <- R2(y=final_data$Approval[-train], pred=pred.tree, family="binomial")
+  T.OOS$tree[k]
+  ## Cross validation for Post Lasso Estimate
+  rmin <- glm(y_var~., data=data.min, subset=train, family="binomial")
+  if ( length(features.1se) == 0){  r1se <- glm(Approval~1, data=final_data, subset=train, family="binomial") 
+  } else {r1se <- glm(y_var~., data=data.1se, subset=train, family="binomial")
+  }
+  predmin <- predict(rmin, newdata=data.min[-train,], type="response")
+  pred1se  <- predict(r1se, newdata=data.1se[-train,], type="response")
+  PL.OOS$PL.min[k] <- R2(y=y_var[-train], pred=predmin, family="binomial")
+  PL.OOS$PL.1se[k] <- R2(y=y_var[-train], pred=pred1se, family="binomial")
+  ## Cross validation for Lasso Estimate
+  lassomin  <- glmnet(x_vars[train,],y_var[train], family="binomial",lambda = cv_lasso$lambda.min)
+  lasso1se  <- glmnet(x_vars[train,],y_var[train], family="binomial",lambda = cv_lasso$lambda.1se)
+  predlassomin <- predict(lassomin, newx=x_vars[-train,], type="response")
+  predlasso1se  <- predict(lasso1se, newx=x_vars[-train,], type="response")
+  L.OOS$L.min[k] <- R2(y=y_var[-train], pred=predlassomin, family="binomial")
+  L.OOS$L.1se[k] <- R2(y=y_var[-train], pred=predlasso1se, family="binomial")
+  
+  print(paste("Iteration",k,"of",nfold,"completed"))
+}
+
+R2performance <- cbind(LR.OOS,T.OOS,PL.OOS, L.OOS)
+par( mar=  c(8, 4, 4, 2) + 0.6 )
+barplot(colMeans(R2performance), las=2,xpd=FALSE, ylim=c(0,.3) , xlab="", ylab = bquote( "Average Out of Sample " ~ R^2))
+m.OOS <- as.matrix(R2performance)
+rownames(m.OOS) <- c(1:nfold)
+par(mar=c(1.5,1.5,1.5,3))
+par(mai=c(1.5,1.5,1.5,3))
+barplot(t(as.matrix(m.OOS)), beside=TRUE,legend=TRUE, args.legend=c(x= "topright", y=0.92,bty = "n"),ylab= bquote( "Out of Sample " ~ R^2), xlab="Fold", names.arg = c(1:10))
